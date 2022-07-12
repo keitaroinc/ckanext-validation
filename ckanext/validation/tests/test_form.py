@@ -1,7 +1,3 @@
-try:
-    import builtins
-except ImportError:
-    import __builtin__ as builtins
 import json
 import io
 import mock
@@ -11,7 +7,6 @@ from bs4 import BeautifulSoup
 from six import BytesIO, ensure_binary
 
 from ckantoolkit import check_ckan_version
-import ckan.lib.uploader
 from ckan.tests import helpers
 from ckan.tests.factories import Sysadmin, Dataset
 from ckan.tests.helpers import (
@@ -19,7 +14,7 @@ from ckan.tests.helpers import (
 )
 
 from ckanext.validation.tests.helpers import (
-    VALID_CSV, mock_uploads, _mock_open_if_open_fails, _mock_os
+    VALID_CSV, INVALID_CSV, mock_uploads
 )
 
 if check_ckan_version('2.9'):
@@ -96,6 +91,9 @@ def _post(app, url, data, resource_id='', upload=None):
 @pytest.mark.usefixtures("clean_db", "validation_setup")
 class TestResourceSchemaForm(object):
 
+    def setup(self):
+        self.app = helpers._get_test_app()
+
     def test_resource_form_includes_json_fields(self, app):
         dataset = Dataset()
 
@@ -153,20 +151,8 @@ class TestResourceSchemaForm(object):
 
         assert dataset['resources'][0]['schema'] == value
 
-    @helpers.change_config('ckan.storage_path', '/doesnt_exist')
-    @mock.patch.object(ckan.lib.uploader, 'os', _mock_os)
-    @mock.patch.object(builtins, 'open',
-                       side_effect=_mock_open_if_open_fails)
-    @mock.patch.object(ckan.lib.uploader, '_storage_path',
-                       new='/doesnt_exist')
-    def test_resource_form_create_upload(self, mock_open, app):
-        # With Python2 only, worked in python3
-        # IF i passed app as argument, with mock_upload I got:
-        # TypeError:
-        # test_resource_form_create_valid() takes exactly 3 arguments (2 given)
-
-        # OR if I created the test up inside the test got:
-        # OSError: [Errno 13] Permission denied: '/doesnt_exist'
+    @mock_uploads
+    def test_resource_form_create_upload(self, mock_open):
         dataset = Dataset()
         value = {
             'fields': [
@@ -181,7 +167,7 @@ class TestResourceSchemaForm(object):
                 'url': 'https://example.com/data.csv',
             }
 
-        _post(app, NEW_RESOURCE_URL.format(dataset['id']),
+        _post(self.app, NEW_RESOURCE_URL.format(dataset['id']),
               params, upload=[upload])
 
         dataset = call_action('package_show', id=dataset['id'])
@@ -460,22 +446,10 @@ class TestResourceValidationOnCreateForm(FunctionalTestBase):
         cfg['ckanext.validation.run_on_create_sync'] = True
 
     def setup(self):
-        pass
+        self.app = helpers._get_test_app()
 
-    @helpers.change_config('ckan.storage_path', '/doesnt_exist')
-    @mock.patch.object(ckan.lib.uploader, 'os', _mock_os)
-    @mock.patch.object(builtins, 'open',
-                       side_effect=_mock_open_if_open_fails)
-    @mock.patch.object(ckan.lib.uploader, '_storage_path',
-                       new='/doesnt_exist')
-    def test_resource_form_create_valid(self, mock_open, app):
-        # With Python2 only, worked in python3
-        # IF i passed app as argument, with mock_upload I got:
-        # TypeError:
-        # test_resource_form_create_valid() takes exactly 3 arguments (2 given)
-
-        # OR if I created the test up inside the test got:
-        # OSError: [Errno 13] Permission denied: '/doesnt_exist'
+    @mock_uploads
+    def test_resource_form_create_valid(self, mock_open):
         dataset = Dataset()
 
         upload = ('upload', 'valid.csv', VALID_CSV)
@@ -487,7 +461,7 @@ class TestResourceValidationOnCreateForm(FunctionalTestBase):
         }
 
         with mock.patch('io.open', return_value=valid_stream):
-            _post(app, NEW_RESOURCE_URL.format(dataset['id']),
+            _post(self.app, NEW_RESOURCE_URL.format(dataset['id']),
                   params, upload=[upload])
 
         dataset = call_action('package_show', id=dataset['id'])
@@ -495,29 +469,27 @@ class TestResourceValidationOnCreateForm(FunctionalTestBase):
         assert dataset['resources'][0]['validation_status'] == 'success'
         assert 'validation_timestamp' in dataset['resources'][0]
 
-    # @mock_uploads
-    # def test_resource_form_create_invalid(self, mock_open, app):
-    #     user = Sysadmin()
-    #     org = Organization(user=user)
-    #     dataset = Dataset(owner_org=org['id'])
+    @mock_uploads
+    def test_resource_form_create_invalid(self, mock_open):
+        dataset = Dataset()
 
-    #     upload = ('upload', 'invalid.csv', INVALID_CSV)
+        upload = ('upload', 'invalid.csv', INVALID_CSV)
 
-    #     invalid_stream = io.BufferedReader(io.BytesIO(INVALID_CSV))
+        invalid_stream = io.BufferedReader(io.BytesIO(INVALID_CSV))
 
-    #     params = {
-    #         'url': 'https://example.com/data.csv'
-    #     }
+        params = {
+            'url': 'https://example.com/data.csv'
+        }
 
-    #     with mock.patch('io.open', return_value=invalid_stream):
-    #         response = _post(app, NEW_RESOURCE_URL.format(dataset['id']),
-    #                          params, upload=[upload])
-    #     print(response.body)
-    #     dataset = call_action('package_show', id=dataset['id'])
-    #     print(dataset)
-    #     assert 'validation' in response.body
-    #     assert 'missing-value' in response.body
-    #     assert 'Row 2 has a missing value in column 4' in response.body
+        with mock.patch('io.open', return_value=invalid_stream):
+            response = _post(self.app, NEW_RESOURCE_URL.format(dataset['id']),
+                             params, upload=[upload])
+
+        dataset = call_action('package_show', id=dataset['id'])
+
+        assert 'validation' in _get_response_body(response)
+        assert 'missing-value' in _get_response_body(response)
+        assert 'Row 2 has a missing value in column 4' in _get_response_body(response)
 
 
 @pytest.mark.usefixtures("clean_db", "validation_setup")
@@ -557,7 +529,7 @@ class TestResourceValidationOnUpdateForm(FunctionalTestBase):
         assert 'validation_timestamp' in dataset['resources'][0]
 
     # @mock_uploads
-    # def test_resource_form_update_invalid(self, mock_open, app):
+    # def test_resource_form_update_invalid(self, mock_open):
 
     #     dataset = Dataset(resources=[
     #         {
@@ -566,22 +538,21 @@ class TestResourceValidationOnUpdateForm(FunctionalTestBase):
     #     ])
 
     #     response = _get_resource_update_page_as_sysadmin(
-    #         app, dataset['id'], dataset['resources'][0]['id'])
+    #         self.app, dataset['id'], dataset['resources'][0]['id'])
 
     #     upload = ('upload', 'invalid.csv', INVALID_CSV)
     #     resource_id = dataset['resources'][0]['id']
     #     params = {}
     #     invalid_stream = io.BufferedReader(io.BytesIO(INVALID_CSV))
 
-    #     with mock.patch('builtins.open', return_value=invalid_stream):
-    #         response = _post(app, EDIT_RESOURCE_URL.format(dataset['id'],
-    #                                                        resource_id),
+    #     with mock.patch('io.open', return_value=invalid_stream):
+    #         response = _post(self.app, EDIT_RESOURCE_URL.format(dataset['id'],
+    #                                                             resource_id),
     #                          params, resource_id=resource_id, upload=[upload])
-    #         print(response)
-    #     print(dir(response))
-    #     assert 'validation' in response.body
-    #     assert 'missing-value' in response.body
-    #     assert 'Row 2 has a missing value in column 4' in response.body
+
+    #     assert 'validation' in _get_response_body(response)
+    #     assert 'missing-value' in _get_response_body(response)
+    #     assert 'Row 2 has a missing value in column 4' in _get_response_body(response)
 
 
 # @pytest.mark.usefixtures("clean_db", "validation_setup")
@@ -593,16 +564,17 @@ class TestResourceValidationOnUpdateForm(FunctionalTestBase):
 #         cfg['ckanext.validation.run_on_update_sync'] = True
 
 #     def setup(self):
-#         pass
+#         self.app = helpers._get_test_app()
 
 #     @mock_uploads
-#     def test_resource_form_fields_are_persisted(self, mock_open, app):
+#     def test_resource_form_fields_are_persisted(self, mock_open):
 
 #         upload = MockFieldStorage(io.BytesIO(VALID_CSV), 'valid.csv')
 
-#         valid_stream = io.BufferedReader(BytesIO(VALID_CSV))
+#         valid_stream = io.BufferedReader(io.BytesIO(VALID_CSV))
 
 #         dataset = Dataset()
+
 #         with mock.patch('io.open', return_value=valid_stream):
 #             resource = call_action(
 #                 'resource_create',
@@ -614,15 +586,12 @@ class TestResourceValidationOnUpdateForm(FunctionalTestBase):
 
 #         assert 'validation_status' in resource
 #         assert resource['validation_status'] == 'success'
-#         assert resource.get('description') is None
 
 #         params = {
 #             'description': 'test desc'
 #         }
 
-#         dataset = call_action('package_show', id=dataset['id'])
-
-#         _post(app, EDIT_RESOURCE_URL.format(dataset['id'], resource['id']),
+#         _post(self.app, EDIT_RESOURCE_URL.format(dataset['id'], resource['id']),
 #               params, resource_id=resource['id'])
 
 #         dataset = call_action('package_show', id=dataset['id'])
