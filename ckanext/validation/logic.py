@@ -491,6 +491,9 @@ def resource_create(context, data_dict):
                 log.debug('Skipping validation for resource {}'.format(resource_id))
                 run_validation = False
 
+        if context.get('_validation_performed'):
+            run_validation = False
+
         if run_validation:
             is_local_upload = (
                 hasattr(upload, 'filename') and
@@ -606,6 +609,9 @@ def resource_update(context, data_dict):
             if not plugin.can_validate(context, data_dict):
                 log.debug('Skipping validation for resource {}'.format(id))
                 run_validation = False
+        
+        if context.get('_validation_performed'):
+            run_validation = False
 
         if run_validation:
             is_local_upload = (
