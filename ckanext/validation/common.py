@@ -78,7 +78,8 @@ def run_validation(assume_yes, resource_id, dataset_id, search_params):
 
     if resource_id:
         for resource_id in resource_id:
-            resource = get_action('resource_show')({'user': context['user']}, {'id': resource_id})
+            user = get_action('get_site_user')
+            resource = get_action('resource_show')({'user': user}, {'id': resource_id})
             _run_validation_on_resource(
                 resource['id'], resource['package_id'])
     else:
