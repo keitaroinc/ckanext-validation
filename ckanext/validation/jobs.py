@@ -8,6 +8,7 @@ import re
 import requests
 from sqlalchemy.orm.exc import NoResultFound
 from frictionless import validate, system, Report, Schema, Dialect, Check
+from ckan.common import config
 
 from ckan.model import Session
 import ckan.lib.uploader as uploader
@@ -76,6 +77,7 @@ def run_validation_job(resource):
 
     if not source:
         source = resource['url']
+        source = source.replace(config.get('ckan.site_url'), "http://localhost:5000")
 
     schema = resource.get('schema')
     if schema:

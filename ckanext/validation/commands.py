@@ -193,7 +193,7 @@ report file on the relevant commands.''')
             msg.format(resource_id, dataset_id))
 
     def _process_row(self, dataset, resource, writer):
-        resource_url = '{}/dataset/{}/resource/{}'.format(
+        resource_url = 'localhost:5000/{}/dataset/{}/resource/{}'.format(
             config['ckan.site_url'],
             dataset['name'],
             resource['id'])
@@ -217,7 +217,7 @@ report file on the relevant commands.''')
 
         error_counts = {}
 
-        resource_url = '{}/dataset/{}/resource/{}'.format(
+        resource_url = 'localhost:5000/{}/dataset/{}/resource/{}'.format(
             config['ckan.site_url'],
             dataset['name'],
             resource['id'])
