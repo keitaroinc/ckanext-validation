@@ -60,6 +60,7 @@ def run_validation_job(resource):
         upload = uploader.get_resource_uploader(resource)
         if isinstance(upload, uploader.ResourceUpload):
             source = upload.get_path(resource['id'])
+            source = source.replace(config.get('ckan.site_url'), "http://localhost:5000")
         else:
             # Upload is not the default implementation (ie it's a cloud storage
             # implementation)
