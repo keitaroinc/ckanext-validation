@@ -42,13 +42,10 @@ from ckanext.validation.interfaces import IDataValidation
 log = logging.getLogger(__name__)
 
 
-if t.check_ckan_version(min_version='2.9.0'):
-    from ckanext.validation.plugin.flask_plugin import MixinPlugin
-else:
-    from ckanext.validation.plugin.pylons_plugin import MixinPlugin
+ckan_2_10 = t.check_ckan_version(min_version="2.10")
 
 
-class ValidationPlugin(MixinPlugin, p.SingletonPlugin, DefaultTranslation):
+class ValidationPlugin(p.SingletonPlugin):
     p.implements(p.IConfigurer)
     p.implements(p.IActions)
     p.implements(p.IAuthFunctions)
@@ -151,8 +148,19 @@ to create the database tables:
 
         return data_dict
 
-    def before_create(self, context, data_dict):
-        return self._process_schema_fields(data_dict)
+    if ckan_2_10:
+        def before_resource_create(self, context, data_dict):
+
+            context["_resource_create_call"] = True
+            return self._process_schema_fields(data_dict)
+            
+    else: 
+        def before_create(self, context, data_dict):
+
+            is_dataset = self._data_dict_is_dataset(data_dict)
+            if not is_dataset:
+                context["_resource_create_call"] = True
+                return self._process_schema_fields(data_dict)
 
     resources_to_validate = {}
 
@@ -277,19 +285,18 @@ to create the database tables:
 
     # IPackageController
 
-    def before_index(self, index_dict):
+    if ckan_2_10:
+        
+        def after_dataset_create(self, context, data_dict):
+            self.after_create(context, data_dict)
+        
+        def before_resource_update(self, context, current_resource, updated_resource):
+            self.before_update(context, current_resource, updated_resource)
 
-        res_status = []
-        dataset_dict = json.loads(index_dict['validated_data_dict'])
-        for resource in dataset_dict.get('resources', []):
-            if resource.get('validation_status'):
-                res_status.append(resource['validation_status'])
+        def after_dataset_update(self, context, data_dict):
+            self.after_update(context, data_dict)
 
-        if res_status:
-            index_dict['vocab_validation_status'] = res_status
-
-        return index_dict
-
+            
     # IValidators
 
     def get_validators(self):
