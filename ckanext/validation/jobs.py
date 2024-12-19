@@ -9,7 +9,7 @@ import requests
 from sqlalchemy.orm.exc import NoResultFound
 from frictionless import validate, system, Report, Schema, Dialect, Check
 
-from ckan.common import config
+from ckan.commands import config
 from ckan.model import Session
 import ckan.lib.uploader as uploader
 
