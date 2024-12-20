@@ -45,3 +45,7 @@ report-css:
     - vendor/frictionless-components/frictionless-components.min.css
 
 
+image-assets:
+  output: ckanext-validation/%(version)s_images
+  contents:
+    - ../../public/images/badges/*
