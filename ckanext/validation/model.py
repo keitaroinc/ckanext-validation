@@ -1,18 +1,10 @@
-# encoding: utf-8
-
 import datetime
 import uuid
 import logging
-
 import sqlalchemy as sa
-
-from sqlalchemy import Column, Unicode, DateTime
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.dialects.postgresql import JSON
-
-from ckan.model.meta import metadata
-
 from ckan import model
+from ckantoolkit import config
 from ckan.model.meta import mapper, metadata
 
 log = logging.getLogger(__name__)
@@ -21,8 +13,6 @@ log = logging.getLogger(__name__)
 def make_uuid():
     return str(uuid.uuid4())
 
-
-Base = declarative_base(metadata=metadata)
 
 class Validation(model.DomainObject):
     @classmethod
@@ -52,6 +42,7 @@ def create_tables():
 
 
 def tables_exist():
-
-
-    return False
+    eng = sa.create_engine(config.get('sqlalchemy.url'))
+    x = sa.inspect(eng).has_table("validation")
+    return x
+ 
