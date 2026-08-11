@@ -176,10 +176,12 @@ to create the database tables:
             for resource in data_dict.get(u'resources', []):
                 self._handle_validation_for_resource(context, resource)
         else:
-            # This is a resource. Resources don't need to be handled here
-            # as there is always a previous `package_update` call that will
-            # trigger the `before_update` and `after_update` hooks
-            pass
+            # This is a resource. `resource_create` uploads the file *after*
+            # the internal `package_update` call that fires `after_update`, so
+            # this hook is the earliest point at which the resource can
+            # actually be downloaded: it runs once both the upload and the
+            # commit are done.
+            self._handle_validation_for_resource(context, data_dict)
 
     def _data_dict_is_dataset(self, data_dict):
         return (
@@ -277,12 +279,13 @@ to create the database tables:
                 return
 
             if context.pop("_resource_create_call", False):
-                new_resource = data_dict["resources"][-1]
-                if new_resource:
-                    # This is part of a resource_create call, we only need to validate
-                    # the new resource being created
-                    self._handle_validation_for_resource(context, new_resource)
-                    return
+                # This is the internal `package_update` call made by
+                # `resource_create`. The uploaded file only reaches its
+                # storage backend after this hook returns, so validating now
+                # would download a URL that is not readable yet (404 with
+                # cloud storage). The new resource is validated from
+                # `after_resource_create` instead.
+                return
 
             for resource in data_dict.get(u'resources', []):
                 if resource[u'id'] in self.resources_to_validate:
@@ -309,6 +312,9 @@ to create the database tables:
                 _run_async_validation(resource_id)
          
     def after_dataset_create(self, context, data_dict):
+        self.after_create(context, data_dict)
+
+    def after_resource_create(self, context, data_dict):
         self.after_create(context, data_dict)
     
     def before_resource_update(self, context, current_resource, updated_resource):
