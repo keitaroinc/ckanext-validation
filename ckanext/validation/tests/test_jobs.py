@@ -5,12 +5,22 @@ import io
 
 import ckantoolkit
 
+import requests
+
+from ckan.lib import api_token
 from ckan.lib.uploader import ResourceUpload
+from ckan.model import ApiToken
 from ckan.tests.helpers import call_action
 from ckan.tests import factories
 
 from ckanext.validation.model import create_tables, tables_exist, Validation
-from ckanext.validation.jobs import run_validation_job, uploader, Session
+from ckanext.validation.jobs import (
+    run_validation_job,
+    uploader,
+    Session,
+    AuthHeaderSession,
+    _resolve_source_url,
+)
 from ckanext.validation.tests.helpers import (
     VALID_REPORT,
     INVALID_REPORT,
@@ -272,3 +282,219 @@ a;b;c
 
         report = json.loads(validation.report)
         assert report["valid"] is True
+
+
+class TestResolveSourceUrl(object):
+    """The worker must download resources from a URL it can actually reach.
+
+    ``ckanext.validation.internal_site_url`` is the opt-in escape hatch for
+    deployments where ``ckan.site_url`` is not routable from the worker.
+    """
+
+    @pytest.mark.ckan_config("ckan.site_url", "https://data.example.com")
+    def test_url_is_left_alone_when_no_internal_url_configured(self):
+
+        url = "https://data.example.com/dataset/d/resource/r/download/f.csv"
+
+        assert _resolve_source_url(url) == url
+
+    @pytest.mark.ckan_config("ckan.site_url", "https://data.example.com")
+    @pytest.mark.ckan_config(
+        "ckanext.validation.internal_site_url", "http://localhost:5000"
+    )
+    def test_site_url_is_swapped_for_the_internal_one(self):
+
+        url = "https://data.example.com/dataset/d/resource/r/download/f.csv"
+
+        assert _resolve_source_url(url) == (
+            "http://localhost:5000/dataset/d/resource/r/download/f.csv"
+        )
+
+    @pytest.mark.ckan_config("ckan.site_url", "https://data.example.com/")
+    @pytest.mark.ckan_config(
+        "ckanext.validation.internal_site_url", "http://localhost:5000/"
+    )
+    def test_trailing_slashes_do_not_duplicate_the_separator(self):
+
+        url = "https://data.example.com/dataset/d/resource/r/download/f.csv"
+
+        assert _resolve_source_url(url) == (
+            "http://localhost:5000/dataset/d/resource/r/download/f.csv"
+        )
+
+    @pytest.mark.ckan_config("ckan.site_url", "https://data.example.com")
+    @pytest.mark.ckan_config(
+        "ckanext.validation.internal_site_url", "http://localhost:5000"
+    )
+    def test_external_urls_are_not_rewritten(self):
+
+        url = "http://example.com/file.csv"
+
+        assert _resolve_source_url(url) == url
+
+
+class MockCloudUploader(object):
+    """Stands in for a cloud storage uploader.
+
+    The point is that it is *not* a ``ckan.lib.uploader.ResourceUpload``, so
+    the resource has to be downloaded over HTTP instead of read from disk.
+    """
+
+    def __init__(self, resource=None):
+        pass
+
+
+def mock_get_cloud_uploader(data_dict):
+    return MockCloudUploader(data_dict)
+
+
+@pytest.mark.usefixtures("clean_db", "validation_setup")
+class TestPrivateDatasetAuthHeader(object):
+    """Private resources on a cloud backend are fetched through CKAN itself,
+    which needs a real API token -- the legacy ``user.apikey`` is not an
+    authentication credential any more.
+    """
+
+    def _run_job_capturing_session(self, resource):
+
+        captured = {}
+
+        def capture(source, **kwargs):
+            session = kwargs.get("http_session")
+            captured["session"] = session
+            if session is not None:
+                header_name = ckantoolkit.config.get(
+                    "apitoken_header_name", "Authorization")
+                token = session.headers.get(header_name)
+                captured["token"] = token
+                # Resolve while the token is still alive
+                user = api_token.get_user_from_token(
+                    token, update_access_time=False) if token else None
+                captured["user"] = user.name if user else None
+            return VALID_REPORT
+
+        with mock.patch(
+            "ckanext.validation.jobs._validate_table", side_effect=capture
+        ):
+            run_validation_job(resource)
+
+        return captured
+
+    @mock.patch.object(
+        uploader, "get_resource_uploader", return_value=mock_get_cloud_uploader({})
+    )
+    def test_token_authenticates_as_the_site_user(self, mock_uploader):
+
+        org = factories.Organization()
+        dataset = factories.Dataset(private=True, owner_org=org["id"])
+        resource = factories.Resource(
+            package_id=dataset["id"], url="__upload", url_type="upload", format="csv"
+        )
+
+        captured = self._run_job_capturing_session(resource)
+
+        site_user = call_action("get_site_user")
+
+        assert captured["token"], "no auth header was sent"
+        assert captured["user"] == site_user["name"]
+
+    @mock.patch.object(
+        uploader, "get_resource_uploader", return_value=mock_get_cloud_uploader({})
+    )
+    def test_token_is_revoked_when_the_job_finishes(self, mock_uploader):
+
+        org = factories.Organization()
+        dataset = factories.Dataset(private=True, owner_org=org["id"])
+        resource = factories.Resource(
+            package_id=dataset["id"], url="__upload", url_type="upload", format="csv"
+        )
+
+        captured = self._run_job_capturing_session(resource)
+
+        assert api_token.get_user_from_token(
+            captured["token"], update_access_time=False) is None
+
+    @pytest.mark.ckan_config(
+        "ckanext.validation.pass_auth_header_value", "preconfigured-token"
+    )
+    @mock.patch.object(
+        uploader, "get_resource_uploader", return_value=mock_get_cloud_uploader({})
+    )
+    def test_configured_header_value_is_used_as_is(self, mock_uploader):
+
+        org = factories.Organization()
+        dataset = factories.Dataset(private=True, owner_org=org["id"])
+        resource = factories.Resource(
+            package_id=dataset["id"], url="__upload", url_type="upload", format="csv"
+        )
+
+        captured = self._run_job_capturing_session(resource)
+
+        assert captured["token"] == "preconfigured-token"
+        assert Session.query(ApiToken).count() == 0, "should not mint a token"
+
+    @pytest.mark.ckan_config("ckanext.validation.pass_auth_header", False)
+    @mock.patch.object(
+        uploader, "get_resource_uploader", return_value=mock_get_cloud_uploader({})
+    )
+    def test_no_auth_header_when_turned_off(self, mock_uploader):
+
+        org = factories.Organization()
+        dataset = factories.Dataset(private=True, owner_org=org["id"])
+        resource = factories.Resource(
+            package_id=dataset["id"], url="__upload", url_type="upload", format="csv"
+        )
+
+        captured = self._run_job_capturing_session(resource)
+
+        assert captured["session"] is None
+        assert Session.query(ApiToken).count() == 0
+
+
+class TestAuthHeaderSession(object):
+    """Cloud backends redirect the CKAN download URL to a signed URL on the
+    storage host. The CKAN credential must not follow it there.
+    """
+
+    def _headers_after_redirect(self, session, from_url, to_url):
+
+        response = requests.Response()
+        response.request = requests.Request("GET", from_url).prepare()
+        prepared = requests.Request(
+            "GET", to_url, headers=dict(session.headers)).prepare()
+
+        session.rebuild_auth(prepared, response)
+
+        return prepared.headers
+
+    @pytest.mark.parametrize(
+        "header_name", ["Authorization", "X-CKAN-API-TOKEN"]
+    )
+    def test_header_is_dropped_when_redirected_to_another_host(self, header_name):
+
+        session = AuthHeaderSession(header_name)
+        session.headers.update({header_name: "secret-token"})
+
+        headers = self._headers_after_redirect(
+            session,
+            "https://data.example.com/dataset/d/resource/r/download/f.csv",
+            "https://storage.example.net/signed/f.csv",
+        )
+
+        assert header_name not in headers
+
+    @pytest.mark.parametrize(
+        "header_name", ["Authorization", "X-CKAN-API-TOKEN"]
+    )
+    def test_header_is_kept_when_redirected_on_the_same_host(self, header_name):
+
+        session = AuthHeaderSession(header_name)
+        session.headers.update({header_name: "secret-token"})
+
+        headers = self._headers_after_redirect(
+            session,
+            "https://data.example.com/dataset/d/resource/r/download/f.csv",
+            "https://data.example.com/somewhere/else.csv",
+        )
+
+        assert headers[header_name] == "secret-token"

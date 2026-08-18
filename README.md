@@ -132,6 +132,21 @@ If you are using a cloud-based storage backend for uploads, check [Private
 datasets](#private-datasets) for other configuration settings that might be
 relevant.
 
+### Downloading resources from the worker
+
+Resources that are not stored on the local filesystem (eg when using a cloud
+storage backend) are downloaded over HTTP using their `url`, which is built
+from `ckan.site_url`. If the machine running the validation jobs can not reach
+`ckan.site_url` (a common case on local development instances, or containers
+with no route back in through the public load balancer), point the worker at an
+internally reachable base URL:
+
+	ckanext.validation.internal_site_url = http://localhost:5000
+
+The `ckan.site_url` prefix of the resource URL is then swapped for this value.
+Leave the option unset on deployments where `ckan.site_url` is reachable, which
+is the normal case in production.
+
 ### Display badges
 
 To prevent the extension from adding the validation badges next to the
@@ -326,11 +341,18 @@ on a cloud-based backend (like the ones provided by [ckanext-cloudstorage](https
 to request the file via an HTTP request to CKAN. If the resource is private
 this will require an `Authorization` header in order to avoid a `Not Authorized` error.
 
-In these cases, the API key for the site user will be passed as part of the
-request (or alternatively `ckanext.validation.pass_auth_header_value` if set in
-the configuration).
+In these cases the extension creates an API token for the site user, sends it
+in the header CKAN reads tokens from (`apitoken_header_name`, `Authorization`
+by default), and revokes the token again as soon as the validation run
+finishes, so no long-lived credential is left behind. Set
+`ckanext.validation.pass_auth_header_value` to send a fixed header value
+instead, in which case no token is created.
 
-As this involves sending API keys to other extensions, this behaviour can be
+The credential is dropped if the download is redirected to another host (cloud
+backends typically redirect to a signed URL on the storage host), so it is only
+ever sent to CKAN itself.
+
+As this involves sending credentials to other extensions, this behaviour can be
 turned off by setting `ckanext.validation.pass_auth_header` to `False`.
 
 Again, these settings only affect private resources when using a cloud-based

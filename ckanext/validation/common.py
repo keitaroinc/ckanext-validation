@@ -126,8 +126,8 @@ def _run_validation_on_resource(resource_id, dataset_id):
 
 
 def _process_row(dataset, resource, writer):
-    resource_url = 'localhost:5000/dataset/{}/resource/{}'.format(
-        # config['ckan.site_url'],
+    resource_url = '{}/dataset/{}/resource/{}'.format(
+        config['ckan.site_url'].rstrip('/'),
         dataset['name'],
         resource['id'])
     validation_url = resource_url + '/validation'
@@ -150,8 +150,8 @@ def _process_row_full(dataset, resource, writer):
 
     error_counts = {}
 
-    resource_url = 'localhost:5000/dataset/{}/resource/{}'.format(
-        # config['ckan.site_url'],
+    resource_url = '{}/dataset/{}/resource/{}'.format(
+        config['ckan.site_url'].rstrip('/'),
         dataset['name'],
         resource['id'])
 

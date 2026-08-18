@@ -56,6 +56,8 @@ def run_validation_job(resource):
         {'ignore_auth': True}, {'id': resource['package_id']})
 
     source = None
+    # Token minted for this run only, revoked once the validation finishes
+    temp_api_token = None
     if resource.get('url_type') == 'upload':
         upload = uploader.get_resource_uploader(resource)
         if isinstance(upload, uploader.ResourceUpload):
@@ -66,19 +68,20 @@ def run_validation_job(resource):
             pass_auth_header = t.asbool(
                 t.config.get('ckanext.validation.pass_auth_header', True))
             if dataset['private'] and pass_auth_header:
-                s = requests.Session()
-                s.headers.update({
-                    'Authorization': t.config.get(
-                        'ckanext.validation.pass_auth_header_value',
-                        _get_site_user_api_key())
-                })
+                auth_header_value = t.config.get(
+                    'ckanext.validation.pass_auth_header_value')
+                if not auth_header_value:
+                    auth_header_value = temp_api_token = \
+                        _create_site_user_api_token()
+
+                auth_header_name = _get_api_token_header_name()
+                s = AuthHeaderSession(auth_header_name)
+                s.headers.update({auth_header_name: auth_header_value})
 
                 options['http_session'] = s
 
     if not source:
-        source = resource['url']
-        source = source.replace(config.get('ckan.site_url'), "http://localhost:5000")
-
+        source = _resolve_source_url(resource['url'])
 
     schema = resource.get('schema')
     if schema:
@@ -89,7 +92,12 @@ def run_validation_job(resource):
             schema = json.loads(schema)
 
     _format = resource['format'].lower()
-    report = _validate_table(source, _format=_format, schema=schema, **options)
+    try:
+        report = _validate_table(
+            source, _format=_format, schema=schema, **options)
+    finally:
+        if temp_api_token:
+            _revoke_api_token(temp_api_token)
 
     # Hide uploaded files
     if type(report) == Report:
@@ -97,7 +105,7 @@ def run_validation_job(resource):
 
     if 'tasks' in report:
         for table in report['tasks']:
-            if table['place'].startswith('/'):
+            if table['place'].startswith('/') or table['place'] == source:
                 table['place'] = resource['url']
     if 'warnings' in report:
         validation.status = 'error'
@@ -139,6 +147,32 @@ def run_validation_job(resource):
 
 
 
+def _resolve_source_url(url):
+    """Return the URL the validation worker should download the resource from.
+
+    Resource URLs are built from ``ckan.site_url``, which is not necessarily
+    reachable from the worker (eg a local development instance, or a container
+    with no route back in through the public load balancer). Those deployments
+    can set ``ckanext.validation.internal_site_url`` to a base URL that *is*
+    reachable, eg::
+
+        ckanext.validation.internal_site_url = http://localhost:5000
+
+    and the site URL prefix is swapped for it. When the option is not set the
+    resource URL is used unchanged.
+    """
+    internal_site_url = (
+        config.get('ckanext.validation.internal_site_url', '') or '').rstrip('/')
+    site_url = (config.get('ckan.site_url', '') or '').rstrip('/')
+
+    if not internal_site_url or not site_url or not url.startswith(site_url):
+        return url
+
+    resolved = internal_site_url + url[len(site_url):]
+    log.debug('Resolved resource URL %s to %s for validation', url, resolved)
+    return resolved
+
+
 def _validate_table(source, _format='csv', schema=None, **options):
 
     # This option is needed to allow Frictionless Framework to validate absolute paths
@@ -171,9 +205,67 @@ def _validate_table(source, _format='csv', schema=None, **options):
     return report
 
 
-def _get_site_user_api_key():
+class AuthHeaderSession(requests.Session):
+    """Session that drops the CKAN auth header when redirected to another host.
 
-    site_user_name = t.get_action('get_site_user')({'ignore_auth': True}, {})
-    site_user = t.get_action('get_site_user')(
-        {'ignore_auth': True}, {'id': site_user_name})
-    return site_user['apikey']
+    Cloud storage backends answer the CKAN download URL with a redirect to a
+    signed URL on the storage host, so the credential must not travel with it.
+    ``requests`` already does this for ``Authorization``, but CKAN can be
+    configured to read tokens from a different header via
+    ``apitoken_header_name``, which it knows nothing about.
+    """
+
+    def __init__(self, auth_header_name):
+        super(AuthHeaderSession, self).__init__()
+        self.auth_header_name = auth_header_name
+
+    def rebuild_auth(self, prepared_request, response):
+        super(AuthHeaderSession, self).rebuild_auth(prepared_request, response)
+
+        if self.auth_header_name.lower() == 'authorization':
+            # Already handled by requests itself
+            return
+
+        if self.should_strip_auth(response.request.url, prepared_request.url):
+            prepared_request.headers.pop(self.auth_header_name, None)
+
+
+def _get_api_token_header_name():
+    """Name of the header CKAN reads API tokens from (``Authorization``)."""
+    return t.config.get('apitoken_header_name', 'Authorization')
+
+
+def _create_site_user_api_token():
+    """Create an API token for the site user and return the encoded token.
+
+    Needed to download private resources that are served through CKAN by a
+    cloud storage backend. The legacy ``user.apikey`` this used to send is no
+    longer an authentication credential -- CKAN resolves the token header with
+    ``ckan.lib.api_token.get_user_from_token``, which only accepts real API
+    tokens -- so sending the API key silently produced a `Not Authorized`
+    error.
+
+    The token is revoked by :func:`_revoke_api_token` as soon as the
+    validation run finishes, so no long-lived credential is left behind.
+    """
+    site_user = t.get_action('get_site_user')({'ignore_auth': True}, {})
+    context = {'ignore_auth': True, 'user': site_user['name']}
+
+    token = t.get_action('api_token_create')(context, {
+        'user': site_user['name'],
+        'name': 'ckanext-validation',
+    })
+
+    return token['token']
+
+
+def _revoke_api_token(token):
+    """Revoke a token created by :func:`_create_site_user_api_token`."""
+    site_user = t.get_action('get_site_user')({'ignore_auth': True}, {})
+    context = {'ignore_auth': True, 'user': site_user['name']}
+
+    try:
+        t.get_action('api_token_revoke')(context, {'token': token})
+    except Exception:
+        # Never let cleanup mask the outcome of the validation itself
+        log.exception('Could not revoke the API token used for validation')
