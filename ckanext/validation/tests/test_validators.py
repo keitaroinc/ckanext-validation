@@ -97,31 +97,63 @@ class TestValidationOptionsValidator(object):
 
     def test_no_default_validation_options(self):
 
-        value = '{"headers":3}'
+        value = '{"limit_rows":3}'
 
         assert validation_options_validator(value, {}) == value
 
     @pytest.mark.ckan_config(
-        "ckanext.validation.default_validation_options", '{"delimiter":";"}'
+        "ckanext.validation.default_validation_options", '{"encoding":"utf-8"}'
     )
     def test_default_validation_options(self):
 
-        value = '{"headers": 3}'
+        value = '{"limit_rows": 3}'
 
         assert (
             validation_options_validator(value, {})
-            == '{"delimiter": ";", "headers": 3}'
+            == '{"encoding": "utf-8", "limit_rows": 3}'
         )
 
     @pytest.mark.ckan_config(
         "ckanext.validation.default_validation_options",
-        '{"delimiter":";", "headers":2}',
+        '{"encoding":"utf-8", "limit_rows":2}',
     )
     def test_default_validation_optionsi_does_not_override(self):
 
-        value = '{"headers": 3}'
+        value = '{"limit_rows": 3}'
 
         assert (
             validation_options_validator(value, {})
-            == '{"delimiter": ";", "headers": 3}'
+            == '{"encoding": "utf-8", "limit_rows": 3}'
         )
+
+    def test_empty_value_is_passed_through(self):
+
+        assert validation_options_validator('', {}) == ''
+
+    def test_unknown_option_is_rejected(self):
+        """A Table Schema descriptor put here instead of in `schema` used to
+        reach Frictionless and fail there, without ever opening the file."""
+
+        value = '{"fields": [{"name": "a", "type": "number"}]}'
+
+        with pytest.raises(Invalid) as e:
+            validation_options_validator(value, {})
+
+        assert "Unknown validation option: fields" in str(e.value)
+
+    def test_unknown_options_are_all_listed(self):
+
+        value = '{"headers": 3, "delimiter": ";", "dialect": {}}'
+
+        with pytest.raises(Invalid) as e:
+            validation_options_validator(value, {})
+
+        assert "Unknown validation options: delimiter, headers" in str(e.value)
+
+    @pytest.mark.ckan_config(
+        "ckanext.validation.default_validation_options", '{"headers":3}'
+    )
+    def test_unknown_option_from_config_is_rejected(self):
+
+        with pytest.raises(Invalid):
+            validation_options_validator('{"limit_rows": 3}', {})

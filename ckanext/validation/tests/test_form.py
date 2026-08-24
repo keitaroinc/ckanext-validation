@@ -289,9 +289,8 @@ class TestResourceValidationOptionsForm(object):
         dataset = Dataset()
 
         value = {
-            "delimiter": ";",
-            "headers": 2,
-            "skip_rows": ["#"],
+            "dialect": {"csv": {"delimiter": ";"}},
+            "skip_errors": ["blank-row"],
         }
         json_value = json.dumps(value)
         data = {
@@ -316,9 +315,8 @@ class TestResourceValidationOptionsForm(object):
 
     def test_resource_form_update(self, app):
         value = {
-            "delimiter": ";",
-            "headers": 2,
-            "skip_rows": ["#"],
+            "dialect": {"csv": {"delimiter": ";"}},
+            "skip_errors": ["blank-row"],
         }
 
         dataset = Dataset(
@@ -328,10 +326,9 @@ class TestResourceValidationOptionsForm(object):
         )
 
         value = {
-            "delimiter": ";",
-            "headers": 2,
-            "skip_rows": ["#"],
-            "skip_tests": ["blank-rows"],
+            "dialect": {"csv": {"delimiter": ";"}},
+            "skip_errors": ["blank-row"],
+            "limit_rows": 100,
         }
 
         json_value = json.dumps(value)

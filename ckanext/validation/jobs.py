@@ -107,17 +107,22 @@ def run_validation_job(resource):
         for table in report['tasks']:
             if table['place'].startswith('/') or table['place'] == source:
                 table['place'] = resource['url']
-    if 'warnings' in report:
-        validation.status = 'error'
-        for index, warning in enumerate(report['warnings']):
-            report['warnings'][index] = re.sub(r'Table ".*"', 'Table', warning)
+
+    # Frictionless warnings are truncation notices ("reached row limit: 100"),
+    # not failures, so they don't decide the status. They can still quote the
+    # local path of an uploaded file, so hide it.
+    for index, warning in enumerate(report.get('warnings') or []):
+        report['warnings'][index] = re.sub(r'Table ".*"', 'Table', warning)
+
+    validation.report = json.dumps(report)
+
     if 'valid' in report:
         validation.status = 'success' if report['valid'] else 'failure'
-        validation.report = json.dumps(report)
     else:
-        validation.report = json.dumps(report)
-        if 'errors' in report and report['errors']: 
-            validation.status = 'error'
+        # No `valid` key means the run did not get far enough to reach a
+        # verdict, so the status is always an error rather than a result.
+        validation.status = 'error'
+        if report.get('errors'):
             validation.error = {
                 'message': [str(err) for err in report['errors']]}
         else:

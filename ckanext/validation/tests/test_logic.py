@@ -783,9 +783,8 @@ class TestValidationOptionsField(object):
         dataset = factories.Dataset()
 
         validation_options = {
-            "delimiter": ";",
-            "headers": 2,
-            "skip_rows": ["#"],
+            "dialect": {"csv": {"delimiter": ";"}},
+            "skip_errors": ["blank-row"],
         }
 
         resource = call_action(
@@ -802,9 +801,8 @@ class TestValidationOptionsField(object):
         dataset = factories.Dataset()
 
         validation_options = """{
-            "delimiter": ";",
-            "headers": 2,
-            "skip_rows": ["#"]
+            "dialect": {"csv": {"delimiter": ";"}},
+            "skip_errors": ["blank-row"]
         }"""
 
         resource = call_action(

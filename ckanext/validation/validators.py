@@ -6,6 +6,31 @@ import tableschema
 from ckantoolkit import Invalid, config
 
 
+# Options the validation job is allowed to forward to
+# `frictionless.validate()`. `source`, `format` and `schema` are passed by the
+# job itself, so supplying them here raises a "multiple values for keyword
+# argument" TypeError. Anything else is either meaningless to `validate()` or,
+# worse, quietly accepted by `Resource` with an entirely different meaning:
+# `fields`, for instance, is a field *count*, not a Table Schema, so a schema
+# descriptor put here fails without ever opening the file.
+VALIDATION_OPTIONS = frozenset([
+    # Checklist
+    u'checklist',
+    u'checks',
+    u'pick_errors',
+    u'skip_errors',
+    # Limits
+    u'limit_errors',
+    u'limit_rows',
+    # Resource options `validate()` forwards
+    u'compression',
+    u'detector',
+    u'dialect',
+    u'encoding',
+    u'innerpath',
+])
+
+
 # Input validators
 
 def resource_schema_validator(value, context):
@@ -48,11 +73,15 @@ def resource_schema_validator(value, context):
 
 
 def validation_options_validator(value, context):
-    '''Add default validation options if not already present
+    '''Add default validation options if not already present, and reject
+    options that the validation job can not pass on to Frictionless.
 
     At this point the value should already be a valid JSON string (ie
     `scheming_valid_json_object` has been run).
     '''
+
+    if not value:
+        return value
 
     default_options = config.get(
         'ckanext.validation.default_validation_options')
@@ -65,5 +94,16 @@ def validation_options_validator(value, context):
         default_options.update(provided_options)
 
         value = json.dumps(default_options, indent=None, sort_keys=True)
+
+    options = value if isinstance(value, dict) else json.loads(value)
+
+    unknown = sorted(set(options) - VALIDATION_OPTIONS)
+    if unknown:
+        raise Invalid(
+            u'Unknown validation option{plural}: {unknown}. '
+            u'Supported options are: {supported}'.format(
+                plural=u's' if len(unknown) > 1 else u'',
+                unknown=u', '.join(unknown),
+                supported=u', '.join(sorted(VALIDATION_OPTIONS))))
 
     return value

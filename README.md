@@ -330,6 +330,22 @@ Validation options can be defined (as a JSON object like the above) on each
 resource (via the UI form or the API on the `validation_options` field) or can
 be set globally by administrators on the CKAN INI file (see [Configuration](#configuration)).
 
+The supported options are the ones the extension can pass on to Frictionless:
+
+| Option | |
+| --- | --- |
+| `checks`, `checklist` | extra [checks](https://framework.frictionlessdata.io/docs/checks/table.html) to run |
+| `pick_errors`, `skip_errors` | error types to keep or ignore |
+| `limit_errors`, `limit_rows` | stop after this many errors or rows |
+| `dialect` | [dialect](https://framework.frictionlessdata.io/docs/framework/dialect.html) descriptor (delimiter, header rows, comment char, ...) |
+| `detector`, `encoding`, `compression`, `innerpath` | how the file itself is read |
+
+Anything else is rejected when the resource is saved. In particular a Table
+Schema belongs in the resource's `schema` field, not here: `fields` is a
+Frictionless *field count*, so a schema descriptor placed in
+`validation_options` fails validation without ever opening the file. `format`
+and `schema` are set by the validation job itself and can not be overridden.
+
 
 ### Private datasets
 
